@@ -29,18 +29,36 @@ def main():
             if not city or not country:
                 continue
 
-            # Format location as "city-country" (adjust format as needed)
-            location_str = f"{city.lower().replace(' ', '-')}-{country.lower()}"
+            # Format location as "city-country" (replace spaces with hyphens)
+            location_str = f"{city.lower().replace(' ', '-')}-{country.lower().replace(' ', '-')}"
             
-            print("\n" + "="*60)
+            # Set the parameters as requested
+            batch_size = 10
+            save_interval = 5
+            max_records = 10
+            max_show_more_clicks = 1
+            
+            print(f"\n{'='*60}")
             print(f"Scraping: {job_title} in {location_str}")
+            print(f"Batch size: {batch_size}, Save interval: {save_interval}")
+            print(f"Max records: {max_records}, Show more clicks: {max_show_more_clicks}")
             print("="*60)
             
-            # Run the scraper
+            # Run the scraper with the specified parameters
             try:
-                parse(job_title, location_str)
+                parse(
+                    job_title, 
+                    location_str,
+                    batch_size=batch_size,
+                    save_interval=save_interval,
+                    max_records=max_records,
+                    max_show_more_clicks=max_show_more_clicks
+                )
             except Exception as e:
-                print(f"Error scraping {job_title} in {location_str}: {str(e)}")
+                print(f"Error processing {job_title} in {location_str}: {str(e)}")
+                # Print traceback for better error diagnosis
+                import traceback
+                traceback.print_exc()
 
 if __name__ == "__main__":
     main()

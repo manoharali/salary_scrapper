@@ -41,7 +41,8 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 
-async def run(playwright: Playwright, keyword: str, place: str, logger):
+async def run(playwright: Playwright, keyword: str, place: str, logger, 
+              batch_size=50, save_interval=100, max_records=500, max_show_more_clicks=17):
     """Collecting details of all jobs in the provided keyword and place"""
     
     logger.info(f"[START] Starting scraping: {keyword} in {place}")
@@ -128,11 +129,11 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         except:
             logger.warning(f"[WARNING] Job cards not found, continuing anyway...")
         
-        # Click "Show more jobs" 17 times to load additional jobs
-        logger.info(f"[MORE] Clicking 'Show more jobs' 17 times...")
+        # Click "Show more jobs" to load additional jobs
+        logger.info(f"[MORE] Clicking 'Show more jobs' {max_show_more_clicks} times...")
         try:
             popup_closed = False
-            for i in range(17):
+            for i in range(max_show_more_clicks):
                 load_more_btn = page.locator('button[data-test="load-more"]')
                 if await load_more_btn.is_visible():
                     await load_more_btn.click()
@@ -183,9 +184,9 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         base_url = "https://www.glassdoor.com"
         total_found = len(links)
         
-        # Smart scraping: if 20+ results, scrape more (up to 500), otherwise scrape all
+        # Smart scraping: if 20+ results, scrape more (up to max_records), otherwise scrape all
         if total_found >= 20:
-            scrape_limit = min(500, total_found)  # Max 500 jobs
+            scrape_limit = min(max_records, total_found)  # Max records as specified
         else:
             scrape_limit = total_found  # Scrape all if less than 20
         
@@ -195,9 +196,7 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         
         job_listings = []
         
-        # Process jobs in batches of 50 for better performance
-        batch_size = 50
-        save_interval = 100  # Save to CSV every 100 records
+        # Process jobs in batches for better performance
         total_jobs = len(links)
         successful_jobs = 0
         
@@ -355,7 +354,7 @@ def filter_jobs_by_location(job_listings, place):
     return filtered_jobs
 
 
-async def process_batch(context, links, start_idx, logger):
+async def process_batch(context, links, start_idx, logger, batch_size=50):
     """Process a batch of job links concurrently"""
     tasks = []
     
@@ -606,7 +605,8 @@ def extract_job_data(tree, link):
     }
 
 
-async def main(keyword: str, place: str):
+async def main(keyword: str, place: str, batch_size=50, save_interval=100, 
+               max_records=500, max_show_more_clicks=17):
     """Main async function"""
     logger = setup_logging()
     
@@ -617,14 +617,25 @@ async def main(keyword: str, place: str):
     print("="*60)
     
     async with async_playwright() as playwright:
-        job_listings = await run(playwright, keyword, place, logger)
-        return job_listings
+        result = await run(playwright, keyword, place, logger, 
+                         batch_size, save_interval, max_records, max_show_more_clicks)
+    return result
 
 
-def parse(keyword: str, place: str):
-    """Parse and return job listings"""
-    job_listings = asyncio.run(main(keyword, place))
-    return job_listings
+def parse(keyword: str, place: str, batch_size=50, save_interval=100, 
+          max_records=500, max_show_more_clicks=17):
+    """Parse and return job listings
+    
+    Args:
+        keyword: Job title to search for
+        place: Location to search in (e.g., 'new-york-ny')
+        batch_size: Number of jobs to process in each batch
+        save_interval: Save progress after this many records
+        max_records: Maximum number of jobs to scrape
+        max_show_more_clicks: Number of times to click 'Show more jobs' button
+    """
+    return asyncio.run(main(keyword, place, batch_size, save_interval, 
+                          max_records, max_show_more_clicks))
 
 
 if __name__ == "__main__":
