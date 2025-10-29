@@ -13,6 +13,7 @@ import re
 import os
 import time
 import logging
+import os
 from datetime import datetime
 
 import unicodecsv as csv
@@ -201,11 +202,20 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         
         print(f"Smart scraping: {total_found} found -> scraping {len(links)} jobs")
         
+        # Create output filename
+        output_file = f"{keyword}-{place}-results.csv"
+        is_first_batch = True
+        
         for batch_start in range(0, len(links), batch_size):
             batch_links = links[batch_start:batch_start + batch_size]
             batch_jobs = await process_batch(context, batch_links, batch_start + 1, logger)
             job_listings.extend(batch_jobs)
             successful_jobs += len(batch_jobs)
+            
+            # Save after every batch (30 jobs)
+            if batch_jobs:  # Only save if we got jobs in this batch
+                save_jobs_to_csv(batch_jobs, output_file, is_first_batch)
+                is_first_batch = False
             
             # Clean progress update
             processed = min(batch_start + batch_size, len(links))
@@ -213,6 +223,12 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
             
             # Increased delay for stability
             await asyncio.sleep(1.0)
+            
+            # Save a backup every 3 batches (90 jobs)
+            if (batch_start // batch_size + 1) % 3 == 0:
+                backup_file = f"{keyword}-{place}-results_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                save_jobs_to_csv(job_listings, backup_file, True)
+                print(f"Created backup: {backup_file}")
         
         await browser.close()
         
@@ -229,6 +245,37 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         logger.error(f"Error in {keyword}-{place}: {str(e)}")
         await browser.close()
         return []
+
+
+def save_jobs_to_csv(jobs, filename, is_first_batch=False):
+    """Save jobs to CSV file, creating it with header if first batch"""
+    if not jobs:
+        return
+        
+    # Define fieldnames for CSV
+    fieldnames = ["Name", "Company", "State", "City", "Salary", "Location", 
+                 "Currency", "Region", "Years of Experience", "Year", "Url"]
+    
+    # Check if file exists to determine if we need to write header
+    file_exists = os.path.exists(filename)
+    
+    try:
+        with open(filename, 'ab') as csvfile:  # 'ab' mode to append in binary mode
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, 
+                                  quoting=csv.QUOTE_ALL)
+            
+            # Write header only if file is new or it's the first batch
+            if not file_exists or is_first_batch:
+                # Need to write in text mode for the header to handle encoding properly
+                with open(filename, 'wb') as f:
+                    f.write(','.join(f'"{field}"' for field in fieldnames).encode('utf-8') + b'\n')
+            
+            # Write the job data
+            for job in jobs:
+                writer.writerow(job)
+                
+    except Exception as e:
+        print(f"Error saving to CSV: {str(e)}")
 
 
 def filter_jobs_by_location(job_listings, place):
@@ -573,24 +620,13 @@ if __name__ == "__main__":
     # Scrape data
     scraped_data = parse(keyword, place)
     
-    # Save to CSV
+    # The CSV is already saved incrementally, just print final message
     output_file = f"{keyword}-{place}-results.csv"
-    
     print("\n" + "="*60)
-    print("Writing to CSV file...")
+    if scraped_data:
+        print(f"Scraping completed. Total jobs saved to: {output_file}")
+        print(f"Total jobs scraped: {len(scraped_data)}")
+    else:
+        print("No data was scraped.")
     print("="*60)
-    
-    with open(output_file, "wb") as csvfile:
-        fieldnames = ["Name", "Company", "State", "City", "Salary", "Location", "Currency", "Region", "Years of Experience", "Year", "Url"]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
-        writer.writeheader()
-        
-        if scraped_data:
-            for data in scraped_data:
-                writer.writerow(data)
-            print(f"Successfully saved {len(scraped_data)} jobs to: {output_file}")
-        else:
-            print("No data to save.")
-    
-    print("\n" + "="*60)
 
