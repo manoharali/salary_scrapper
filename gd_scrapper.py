@@ -128,11 +128,11 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         except:
             logger.warning(f"[WARNING] Job cards not found, continuing anyway...")
         
-        # Try clicking "Show more jobs" twice to load additional jobs
-        logger.info(f"[MORE] Trying to click 'Show more jobs' twice...")
+        # Click "Show more jobs" 17 times to load additional jobs
+        logger.info(f"[MORE] Clicking 'Show more jobs' 17 times...")
         try:
             popup_closed = False
-            for i in range(5):
+            for i in range(17):
                 load_more_btn = page.locator('button[data-test="load-more"]')
                 if await load_more_btn.is_visible():
                     await load_more_btn.click()
@@ -183,9 +183,9 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         base_url = "https://www.glassdoor.com"
         total_found = len(links)
         
-        # Smart scraping: if 20+ results, scrape more (up to 60), otherwise scrape all
+        # Smart scraping: if 20+ results, scrape more (up to 500), otherwise scrape all
         if total_found >= 20:
-            scrape_limit = min(200, total_found)  # Max 60 for safety
+            scrape_limit = min(500, total_found)  # Max 500 jobs
         else:
             scrape_limit = total_found  # Scrape all if less than 20
         
@@ -195,16 +195,22 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         
         job_listings = []
         
-        # Process jobs in smaller batches for stability
-        batch_size = 20  # Process 5 jobs at a time
+        # Process jobs in batches of 50 for better performance
+        batch_size = 50
         save_interval = 100  # Save to CSV every 100 records
         total_jobs = len(links)
         successful_jobs = 0
         
         print(f"Smart scraping: {total_found} found -> scraping {len(links)} jobs")
         
-        # Create output filename
-        output_file = f"{keyword}-{place}-results.csv"
+        # Create output directories
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
+        backup_dir = os.path.join(output_dir, 'backups')
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # Create output filename in output directory
+        output_file = os.path.join(output_dir, f"{keyword}-{place}-results.csv")
         is_first_batch = True
         
         # Temporary storage for jobs before saving
@@ -222,9 +228,9 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
                 if pending_jobs:  # Only save if we have jobs
                     save_jobs_to_csv(pending_jobs, output_file, is_first_batch)
                     is_first_batch = False
-                    
+            
                     # Create a timestamped backup
-                    backup_file = f"{keyword}-{place}-results_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                    backup_file = os.path.join(backup_dir, f"{keyword}-{place}-results_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
                     save_jobs_to_csv(job_listings, backup_file, True)
                     print(f"Saved {len(pending_jobs)} jobs to CSV. Created backup: {backup_file}")
                     pending_jobs = []  # Reset the pending jobs
@@ -264,6 +270,13 @@ def save_jobs_to_csv(jobs, filename, is_first_batch=False):
     if not jobs:
         return
         
+    # Create output directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Update filename to include output directory
+    filename = os.path.join(output_dir, os.path.basename(filename))
+    
     # Define fieldnames for CSV
     fieldnames = ["Name", "Company", "State", "City", "Salary", "Location", 
                  "Currency", "Region", "Years of Experience", "Year", "Url"]
