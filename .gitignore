@@ -1,0 +1,28 @@
+# Data
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.build/
+
+# Envs
+.venv/
+venv/
+env/
+
+# Tools
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
