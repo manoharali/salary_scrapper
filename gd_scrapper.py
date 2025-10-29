@@ -108,16 +108,13 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         await location_input.fill(location_text)
         await page.wait_for_timeout(timeout=500)  # No suggestion wait; continue
         
-        # Submit the form
-        logger.info(f"[SUBMIT] Submitting search form...")
+        # Submit the form by pressing Enter (more reliable)
+        logger.info(f"[SUBMIT] Submitting search form (Enter key)...")
         try:
-            submit_button = page.locator('button[type="submit"]')
-            if await submit_button.is_visible():
-                await submit_button.click()
-            else:
-                await location_input.press('Enter')
-        except:
             await location_input.press('Enter')
+        except Exception:
+            # Fallback: press Enter on the page if the location input lost focus
+            await page.keyboard.press('Enter')
         
         # Wait for results page to load
         logger.info(f"[WAIT] Waiting for search results...")
