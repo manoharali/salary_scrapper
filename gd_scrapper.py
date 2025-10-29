@@ -46,21 +46,22 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
     logger.info(f"[START] Starting scraping: {keyword} in {place}")
     start_time = time.time()
     
-    # Launch browser in headless mode for speed
-    browser = await playwright.chromium.launch(
-        headless=False,  # No browser window
-        args=[
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-images',
-            '--disable-plugins',
-            '--disable-extensions'
-        ]
-    )
+    # Launch a visible browser window
+    try:
+        browser = await playwright.chromium.launch(
+            headless=False,
+            channel="chrome",
+            slow_mo=150
+        )
+    except Exception:
+        # Fallback to bundled Chromium if Chrome channel unavailable
+        browser = await playwright.chromium.launch(
+            headless=False,
+            slow_mo=150
+        )
     
     context = await browser.new_context(
-        viewport={'width': 1280, 'height': 720},
+        viewport=None,  # real window size
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     )
     
@@ -86,14 +87,14 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         # Form-based search like new_scraper.py
         logger.info(f"[LOAD] Navigating to Glassdoor job search page...")
         await page.goto("https://www.glassdoor.com/Job/index.htm", wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(timeout=3000)  # Wait for page to fully load
+        await page.wait_for_timeout(timeout=1500)  # Shorter wait for page to load
         
         # Find and fill job title field
         logger.info(f"[INPUT] Entering job title: {keyword}")
         job_title_input = page.locator('#searchBar-jobTitle')
         await job_title_input.click()
         await job_title_input.fill(keyword)
-        await page.wait_for_timeout(timeout=1000)  # Wait for autocomplete
+        await page.wait_for_timeout(timeout=500)  # Brief pause
         
         # Find and fill location field - convert place to readable format
         # Handle formats like "new-york-ny" -> "New York"
@@ -105,18 +106,7 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         location_input = page.locator('#searchBar-location')
         await location_input.click()
         await location_input.fill(location_text)
-        await page.wait_for_timeout(timeout=2000)  # Wait for location suggestions
-        
-        # Wait for location dropdown and select first suggestion
-        logger.info(f"[DROPDOWN] Waiting for location suggestions...")
-        try:
-            await page.wait_for_selector('#searchBar-location-search-suggestions li', timeout=5000)
-            first_suggestion = page.locator('#searchBar-location-search-suggestions li').first
-            await first_suggestion.click()
-            logger.info(f"[SELECTED] Selected first location suggestion")
-            await page.wait_for_timeout(timeout=1000)
-        except Exception as e:
-            logger.warning(f"[WARNING] Could not find location suggestions: {str(e)}")
+        await page.wait_for_timeout(timeout=500)  # No suggestion wait; continue
         
         # Submit the form
         logger.info(f"[SUBMIT] Submitting search form...")
@@ -131,7 +121,7 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         
         # Wait for results page to load
         logger.info(f"[WAIT] Waiting for search results...")
-        await page.wait_for_timeout(timeout=3000)
+        await page.wait_for_timeout(timeout=1000)
         
         # Wait for job listings to appear
         try:
@@ -139,6 +129,34 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
             logger.info(f"[LOADED] Search results page loaded")
         except:
             logger.warning(f"[WARNING] Job cards not found, continuing anyway...")
+        
+        # Try clicking "Show more jobs" twice to load additional jobs
+        logger.info(f"[MORE] Trying to click 'Show more jobs' twice...")
+        try:
+            popup_closed = False
+            for i in range(2):
+                load_more_btn = page.locator('button[data-test="load-more"]')
+                if await load_more_btn.is_visible():
+                    await load_more_btn.click()
+                    # First time only: wait up to 5s for popup; press Escape to dismiss
+                    if not popup_closed:
+                        try:
+                            # If a dialog appears, dismiss immediately
+                            await page.wait_for_selector('[role="dialog"]', timeout=5000)
+                            await page.keyboard.press('Escape')
+                            popup_closed = True
+                            await page.wait_for_timeout(timeout=250)
+                        except Exception:
+                            # Even if no dialog detected, press Escape after 5s as a fallback
+                            await page.wait_for_timeout(timeout=5000)
+                            await page.keyboard.press('Escape')
+                            popup_closed = True
+                            await page.wait_for_timeout(timeout=250)
+                    await page.wait_for_timeout(timeout=800)
+                else:
+                    break
+        except Exception as e:
+            logger.warning(f"[WARNING] Could not click 'Show more jobs': {str(e)}")
         
         # Scroll to load more jobs
         logger.info(f"[SCROLL] Scrolling to load more jobs...")
