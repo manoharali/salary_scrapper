@@ -132,7 +132,7 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         logger.info(f"[MORE] Trying to click 'Show more jobs' twice...")
         try:
             popup_closed = False
-            for i in range(2):
+            for i in range(5):
                 load_more_btn = page.locator('button[data-test="load-more"]')
                 if await load_more_btn.is_visible():
                     await load_more_btn.click()
@@ -185,7 +185,7 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         
         # Smart scraping: if 20+ results, scrape more (up to 60), otherwise scrape all
         if total_found >= 20:
-            scrape_limit = min(60, total_found)  # Max 60 for safety
+            scrape_limit = min(200, total_found)  # Max 60 for safety
         else:
             scrape_limit = total_found  # Scrape all if less than 20
         
@@ -196,7 +196,8 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         job_listings = []
         
         # Process jobs in smaller batches for stability
-        batch_size = 5  # Reduced batch size for better stability
+        batch_size = 20  # Process 5 jobs at a time
+        save_interval = 100  # Save to CSV every 100 records
         total_jobs = len(links)
         successful_jobs = 0
         
@@ -206,29 +207,40 @@ async def run(playwright: Playwright, keyword: str, place: str, logger):
         output_file = f"{keyword}-{place}-results.csv"
         is_first_batch = True
         
+        # Temporary storage for jobs before saving
+        pending_jobs = []
+        
         for batch_start in range(0, len(links), batch_size):
             batch_links = links[batch_start:batch_start + batch_size]
             batch_jobs = await process_batch(context, batch_links, batch_start + 1, logger)
             job_listings.extend(batch_jobs)
+            pending_jobs.extend(batch_jobs)
             successful_jobs += len(batch_jobs)
             
-            # Save after every batch (30 jobs)
-            if batch_jobs:  # Only save if we got jobs in this batch
-                save_jobs_to_csv(batch_jobs, output_file, is_first_batch)
-                is_first_batch = False
+            # Save to CSV after accumulating 100 jobs
+            if len(pending_jobs) >= save_interval:
+                if pending_jobs:  # Only save if we have jobs
+                    save_jobs_to_csv(pending_jobs, output_file, is_first_batch)
+                    is_first_batch = False
+                    
+                    # Create a timestamped backup
+                    backup_file = f"{keyword}-{place}-results_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                    save_jobs_to_csv(job_listings, backup_file, True)
+                    print(f"Saved {len(pending_jobs)} jobs to CSV. Created backup: {backup_file}")
+                    pending_jobs = []  # Reset the pending jobs
             
             # Clean progress update
             processed = min(batch_start + batch_size, len(links))
-            print(f"Progress: {processed}/{total_jobs} jobs processed | {successful_jobs} successful")
+            print(f"Progress: {processed}/{total_jobs} jobs processed | {successful_jobs} successful | Pending save: {len(pending_jobs)} jobs")
             
             # Increased delay for stability
             await asyncio.sleep(1.0)
-            
-            # Save a backup every 3 batches (90 jobs)
-            if (batch_start // batch_size + 1) % 3 == 0:
-                backup_file = f"{keyword}-{place}-results_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                save_jobs_to_csv(job_listings, backup_file, True)
-                print(f"Created backup: {backup_file}")
+        
+        # Save any remaining jobs that didn't reach the 100-job threshold
+        if pending_jobs:
+            save_jobs_to_csv(pending_jobs, output_file, is_first_batch)
+            is_first_batch = False
+            print(f"Saved final {len(pending_jobs)} jobs to CSV")
         
         await browser.close()
         
@@ -396,7 +408,9 @@ def extract_job_data(tree, link):
     role = role_elements[0].strip() if role_elements else "N/A"
     
     # Company name - try multiple selectors
-    company_elements = tree.xpath('//div[@class="JobDetails_jobDetailsHeader__qKuvs"]/a/div/span/text()')
+    company_elements = tree.xpath('//h4[contains(@class, "heading_Heading") and contains(@class, "heading_Subhead")]/text()')
+    if not company_elements:
+        company_elements = tree.xpath('//div[@class="JobDetails_jobDetailsHeader__qKuvs"]/a/div/span/text()')
     if not company_elements:
         company_elements = tree.xpath('//span[contains(@class, "employerName")]/text()')
     if not company_elements:
@@ -429,11 +443,22 @@ def extract_job_data(tree, link):
             pass
     company_name = company_elements[0].strip() if company_elements else "N/A"
     
-    # Location
-    location_elements = tree.xpath('//div[@class="JobDetails_jobDetailsHeader__qKuvs"]/div/text()')
-    if not location_elements:
-        location_elements = tree.xpath('//div[contains(@class, "location")]/text()')
-    location = location_elements[0].strip() if location_elements else "N/A"
+    # Location - try multiple selectors
+    location = "N/A"
+    # Try different location selectors
+    location_selectors = [
+        '//div[@class="JobDetails_jobDetailsHeader__qKuvs"]/div/text()',
+        '//div[contains(@class, "location")]/text()',
+        '//div[@data-test="location"]/text()',
+        '//span[contains(@class, "location")]/text()',
+        '//div[contains(@class, "JobDetails_location")]/text()'
+    ]
+    
+    for selector in location_selectors:
+        location_elements = tree.xpath(selector)
+        if location_elements and location_elements[0].strip():
+            location = location_elements[0].strip()
+            break
     
     # Parse city and state
     try:
@@ -459,81 +484,62 @@ def extract_job_data(tree, link):
     except:
         pass
     
-    # Salary
-    salary_elements = tree.xpath('//div[@class="SalaryEstimate_averageEstimate__xF_7h"]/text()')
-    if not salary_elements:
-        salary_elements = tree.xpath('//span[contains(@class, "salary")]/text()')
-    if not salary_elements:
-        salary_elements = tree.xpath('//div[contains(@class, "SalaryEstimate")]//text()')
-    
+    # Salary - try multiple selectors and formats
     salary = "N/A"
-    if salary_elements:
-        salary_text = " ".join(salary_elements).strip()
-        min_match = re.search(r'minimum salary is \$(\d+)K', salary_text)
-        max_match = re.search(r'max salary is \$(\d+)K', salary_text)
-        
-        if min_match and max_match:
-            min_sal = min_match.group(1) + "K"
-            max_sal = max_match.group(1) + "K"
-            salary = f"${min_sal} - ${max_sal}"
-        elif min_match:
-            min_sal = min_match.group(1) + "K"
-            salary = f"${min_sal}"
+    salary_selectors = [
+        '//div[contains(@class, "JobCard_salaryEstimate")]',  # New format with &nbsp;
+        '//div[contains(@class, "SalaryEstimate_averageEstimate")]//text()',
+        '//span[contains(@class, "salary")]//text()',
+        '//div[contains(@class, "SalaryEstimate")]//text()',
+        '//p[contains(translate(., "PAY", "pay"), "pay")]//text()',
+        '//*[contains(translate(., "SALARY", "salary"), "salary")]//text()'
+    ]
+    
+    for selector in salary_selectors:
+        if 'JobCard_salaryEstimate' in selector:
+            # Special handling for the new format with &nbsp;
+            salary_div = tree.xpath(selector)
+            if salary_div:
+                # Get the entire text content including &nbsp;
+                salary_text = html.tostring(salary_div[0], method='text', encoding='unicode')
+                # Clean up the text
+                salary_text = ' '.join(salary_text.split())
+                # Extract the salary range (e.g., "SGD 97K - SGD 144K (Glassdoor est.)")
+                range_match = re.search(r'([A-Za-z$€£¥₹₩₽₱₪₫₴₺₼₽₾֏؋]+\s*\d+(?:\.\d+)?[KkMmBb]?)(?:\s*-\s*([A-Za-z$€£¥₹₩₽₱₪₫₴₺₼₽₾֏؋]+\s*\d+(?:\.\d+)?[KkMmBb]?))?', salary_text)
+                if range_match:
+                    min_sal = range_match.group(1).strip()
+                    max_sal = range_match.group(2).strip() if range_match.group(2) else ""
+                    salary = f"{min_sal} - {max_sal}" if max_sal else min_sal
+                    break
         else:
-            # Clean salary text by removing location references
-            salary = salary_text[:100]  # Take first 100 characters
-            # Remove common location patterns
-            for location_pattern in ["Boston, MA", "New York, NY", "Hyderabad, India", "San Francisco, CA"]:
-                if location_pattern in salary:
-                    salary = salary.split(location_pattern)[0].strip()
+            # Original handling for other selectors
+            salary_elements = tree.xpath(selector)
+            if salary_elements:
+                salary_text = " ".join([s.strip() for s in salary_elements if s.strip()])
+                if salary_text:
+                    # Try to extract salary ranges in various formats
+                    # Format 1: Rs200,000.00 - Rs300,000.00 per month
+                    range_match = re.search(r'([A-Za-z$€£¥₹₩₽₱₪₫₴₺₼₽₾֏؋]\s*\d{1,3}(?:[,\s]?\d{3})*(?:\.\d+)?)(?:\s*-\s*([A-Za-z$€£¥₹₩₽₱₪₫₴₺₼₽₾֏؋]?\s*\d{1,3}(?:[,\s]?\d{3})*(?:\.\d+)?))?', salary_text)
+                    if range_match:
+                        min_sal = range_match.group(1).strip()
+                        max_sal = range_match.group(2).strip() if range_match.group(2) else ""
+                        salary = f"{min_sal} - {max_sal}" if max_sal else min_sal
+                        break
+                    
+                    # Format 2: $100K - $150K
+                    k_range_match = re.search(r'([$€£¥₹₩₽₱₪₫₴₺₼₽₾֏؋]\s*\d+\s*[Kk])\s*-\s*([$€£¥₹₩₽₱₪₫₴₺₼₽₾֏؋]?\s*\d+\s*[Kk])', salary_text)
+                    if k_range_match:
+                        min_sal = k_range_match.group(1).strip()
+                        max_sal = k_range_match.group(2).strip()
+                        salary = f"{min_sal} - {max_sal}"
+                        break
+                    
+                    # If no specific format matched, use the text as is (truncated)
+                    salary = salary_text[:100].strip()
                     break
     
-    # Currency - Worldwide detection
-    currency = "USD"  # Default
-    if "$" in salary:
-        currency = "USD"
-    elif "€" in salary:
-        currency = "EUR"
-    elif "£" in salary:
-        currency = "GBP"
-    elif "¥" in salary:
-        currency = "JPY"
-    elif "₹" in salary or "INR" in salary.upper():
-        currency = "INR"
-    elif "CAD" in salary.upper():
-        currency = "CAD"
-    elif "AUD" in salary.upper():
-        currency = "AUD"
-    elif "CHF" in salary.upper():
-        currency = "CHF"
-    elif "SEK" in salary.upper():
-        currency = "SEK"
-    elif "NOK" in salary.upper():
-        currency = "NOK"
-    elif "DKK" in salary.upper():
-        currency = "DKK"
-    elif "PLN" in salary.upper():
-        currency = "PLN"
-    elif "CZK" in salary.upper():
-        currency = "CZK"
-    elif "HUF" in salary.upper():
-        currency = "HUF"
-    elif "RUB" in salary.upper():
-        currency = "RUB"
-    elif "BRL" in salary.upper():
-        currency = "BRL"
-    elif "MXN" in salary.upper():
-        currency = "MXN"
-    elif "ZAR" in salary.upper():
-        currency = "ZAR"
-    elif "KRW" in salary.upper():
-        currency = "KRW"
-    elif "SGD" in salary.upper():
-        currency = "SGD"
-    elif "HKD" in salary.upper():
-        currency = "HKD"
-    elif "NZD" in salary.upper():
-        currency = "NZD"
+    # Currency set to null as requested
+    currency = None
     
     # Region
     region = location if location != "N/A" else f"{city}, {state}" if city != "N/A" and state != "N/A" else "N/A"
