@@ -33,10 +33,10 @@ def main():
             location_str = f"{city.lower().replace(' ', '-')}-{country.lower().replace(' ', '-')}"
             
             # Set the parameters as requested
-            batch_size = 10
-            save_interval = 5
-            max_records = 10
-            max_show_more_clicks = 1
+            batch_size = 07
+            save_interval = 50
+            max_records = 500
+            max_show_more_clicks = 17
             
             print(f"\n{'='*60}")
             print(f"Scraping: {job_title} in {location_str}")
